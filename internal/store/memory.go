@@ -13,21 +13,24 @@ import (
 type Memory struct {
 	mu sync.RWMutex
 
-	apiaries    map[string]domain.Apiary
-	hives       map[string]domain.Hive
-	inspections map[string][]domain.Inspection
-	queens      map[string][]domain.Queen
+	apiaries     map[string]domain.Apiary
+	hives        map[string]domain.Hive
+	inspections  map[string][]domain.Inspection
+	queens       map[string][]domain.Queen
+	dispositions map[string][]domain.Disposition
 
-	inspectionSeq int
-	queenSeq      int
+	inspectionSeq  int
+	queenSeq       int
+	dispositionSeq int
 }
 
 func NewMemory() *Memory {
 	return &Memory{
-		apiaries:    make(map[string]domain.Apiary),
-		hives:       make(map[string]domain.Hive),
-		inspections: make(map[string][]domain.Inspection),
-		queens:      make(map[string][]domain.Queen),
+		apiaries:     make(map[string]domain.Apiary),
+		hives:        make(map[string]domain.Hive),
+		inspections:  make(map[string][]domain.Inspection),
+		queens:       make(map[string][]domain.Queen),
+		dispositions: make(map[string][]domain.Disposition),
 	}
 }
 
@@ -177,6 +180,59 @@ func (m *Memory) ListInspections(hiveID string) ([]domain.Inspection, error) {
 	return out, nil
 }
 
+// AddDisposition 把处置绑定到蜂箱当前最近一次巡检，并在同一把写锁内完成
+// 存在性、关注项派生来源与重复处置的校验。与巡检提交并发时，处置要么落在
+// 旧巡检上（新巡检的关注项随后重新显示为未处置），要么落在新巡检上，
+// 两种交错下同一关注项的最终状态都唯一。
+func (m *Memory) AddDisposition(hiveID string, disposition domain.Disposition) (domain.Disposition, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.hives[hiveID]; !ok {
+		return domain.Disposition{}, domain.NotFound("蜂箱", hiveID)
+	}
+	latest, ok := latestInspection(m.inspections[hiveID])
+	if !ok {
+		return domain.Disposition{}, domain.InvalidState("蜂箱 %q 尚无巡检，没有可处置的关注项", hiveID)
+	}
+	if !containsString(latest.Concerns, disposition.Concern) {
+		return domain.Disposition{}, domain.InvalidState(
+			"蜂箱 %q 最近一次巡检 %q 未派生关注项 %q", hiveID, latest.ID, disposition.Concern)
+	}
+	for _, existing := range m.dispositions[hiveID] {
+		if existing.InspectionID == latest.ID && existing.Concern == disposition.Concern {
+			return domain.Disposition{}, domain.Conflict(
+				"关注项 %q（巡检 %q）已登记处置 %q", disposition.Concern, latest.ID, existing.ID)
+		}
+	}
+	m.dispositionSeq++
+	disposition.ID = fmt.Sprintf("disposition-%06d", m.dispositionSeq)
+	disposition.HiveID = hiveID
+	disposition.InspectionID = latest.ID
+	m.dispositions[hiveID] = append(m.dispositions[hiveID], disposition)
+	return disposition, nil
+}
+
+func (m *Memory) ListDispositions(hiveID string) ([]domain.Disposition, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if _, ok := m.hives[hiveID]; !ok {
+		return nil, domain.NotFound("蜂箱", hiveID)
+	}
+	items := m.dispositions[hiveID]
+	out := make([]domain.Disposition, len(items))
+	copy(out, items)
+	return out, nil
+}
+
+func containsString(items []string, target string) bool {
+	for _, item := range items {
+		if item == target {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *Memory) ListQueens(hiveID string) ([]domain.Queen, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -194,10 +250,11 @@ func (m *Memory) Snapshot() Snapshot {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	snapshot := Snapshot{
-		Apiaries:          make(map[string]domain.Apiary, len(m.apiaries)),
-		Hives:             make(map[string]domain.Hive, len(m.hives)),
-		InspectionsByHive: make(map[string][]domain.Inspection, len(m.inspections)),
-		QueensByHive:      make(map[string][]domain.Queen, len(m.queens)),
+		Apiaries:           make(map[string]domain.Apiary, len(m.apiaries)),
+		Hives:              make(map[string]domain.Hive, len(m.hives)),
+		InspectionsByHive:  make(map[string][]domain.Inspection, len(m.inspections)),
+		QueensByHive:       make(map[string][]domain.Queen, len(m.queens)),
+		DispositionsByHive: make(map[string][]domain.Disposition, len(m.dispositions)),
 	}
 	for id, apiary := range m.apiaries {
 		snapshot.Apiaries[id] = apiary
@@ -223,6 +280,11 @@ func (m *Memory) Snapshot() Snapshot {
 			}
 		}
 		snapshot.QueensByHive[id] = copied
+	}
+	for id, items := range m.dispositions {
+		copied := make([]domain.Disposition, len(items))
+		copy(copied, items)
+		snapshot.DispositionsByHive[id] = copied
 	}
 	return snapshot
 }

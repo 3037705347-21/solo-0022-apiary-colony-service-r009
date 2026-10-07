@@ -15,6 +15,8 @@ type HiveSummary struct {
 	State            string     `json:"state"`
 	LastInspectionAt *time.Time `json:"lastInspectionAt"`
 	LatestConcerns   []string   `json:"latestConcerns"`
+	OpenConcerns     []string   `json:"openConcerns"`
+	ResolvedConcerns []string   `json:"resolvedConcerns"`
 	QueenID          string     `json:"queenId"`
 	QueenMarkColor   string     `json:"queenMarkColor"`
 }
@@ -27,6 +29,7 @@ type Report struct {
 	StateCounts     map[string]int `json:"stateCounts"`
 	NeedsInspection []string       `json:"needsInspection"`
 	ConcernHives    []string       `json:"concernHives"`
+	ResolvedHives   []string       `json:"resolvedHives"`
 	LayingQueens    int            `json:"layingQueens"`
 	Hives           []HiveSummary  `json:"hives"`
 }
@@ -41,6 +44,7 @@ func BuildReport(snapshot store.Snapshot, apiary domain.Apiary, asOf time.Time) 
 		StateCounts:     initialStateCounts(),
 		NeedsInspection: []string{},
 		ConcernHives:    []string{},
+		ResolvedHives:   []string{},
 		Hives:           []HiveSummary{},
 	}
 	hives := snapshot.ApiaryHives(apiary.ID)
@@ -52,6 +56,8 @@ func BuildReport(snapshot store.Snapshot, apiary domain.Apiary, asOf time.Time) 
 			State:            string(hive.State),
 			LastInspectionAt: hive.LastInspectionAt,
 			LatestConcerns:   []string{},
+			OpenConcerns:     []string{},
+			ResolvedConcerns: []string{},
 		}
 		if queen, ok := snapshot.LayingQueen(hive.ID); ok {
 			summary.QueenID = queen.ID
@@ -63,7 +69,19 @@ func BuildReport(snapshot store.Snapshot, apiary domain.Apiary, asOf time.Time) 
 			summary.LastInspectionAt = &observedAt
 			if len(latest.Concerns) > 0 {
 				summary.LatestConcerns = append([]string{}, latest.Concerns...)
-				report.ConcernHives = append(report.ConcernHives, hive.ID)
+				resolved := resolvedConcernSet(snapshot.DispositionsFor(hive.ID, latest.ID))
+				for _, concern := range latest.Concerns {
+					if _, ok := resolved[concern]; ok {
+						summary.ResolvedConcerns = append(summary.ResolvedConcerns, concern)
+					} else {
+						summary.OpenConcerns = append(summary.OpenConcerns, concern)
+					}
+				}
+				if len(summary.OpenConcerns) > 0 {
+					report.ConcernHives = append(report.ConcernHives, hive.ID)
+				} else {
+					report.ResolvedHives = append(report.ResolvedHives, hive.ID)
+				}
 			}
 		}
 		if NeedsInspection(hive, asOf) {
@@ -73,7 +91,17 @@ func BuildReport(snapshot store.Snapshot, apiary domain.Apiary, asOf time.Time) 
 	}
 	sort.Strings(report.NeedsInspection)
 	sort.Strings(report.ConcernHives)
+	sort.Strings(report.ResolvedHives)
 	return report
+}
+
+// resolvedConcernSet 汇总一次巡检下已处置的关注项，供派生关注项逐一比对。
+func resolvedConcernSet(dispositions []domain.Disposition) map[string]struct{} {
+	set := make(map[string]struct{}, len(dispositions))
+	for _, item := range dispositions {
+		set[item.Concern] = struct{}{}
+	}
+	return set
 }
 
 // NeedsInspection 判定蜂箱是否需要巡检：从未巡检，或距 asOf 超过巡检窗口。

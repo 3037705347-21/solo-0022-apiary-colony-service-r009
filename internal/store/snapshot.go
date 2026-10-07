@@ -8,10 +8,11 @@ import (
 
 // Snapshot 是一次一致性读取的结果，供聚合与校验使用。
 type Snapshot struct {
-	Apiaries          map[string]domain.Apiary
-	Hives             map[string]domain.Hive
-	InspectionsByHive map[string][]domain.Inspection
-	QueensByHive      map[string][]domain.Queen
+	Apiaries           map[string]domain.Apiary
+	Hives              map[string]domain.Hive
+	InspectionsByHive  map[string][]domain.Inspection
+	QueensByHive       map[string][]domain.Queen
+	DispositionsByHive map[string][]domain.Disposition
 }
 
 // ApiaryHives 返回蜂场下的蜂箱，按编号升序稳定排序。
@@ -28,7 +29,11 @@ func (s Snapshot) ApiaryHives(apiaryID string) []domain.Hive {
 
 // LatestInspection 返回蜂箱最近一次巡检；观察时间相同时按编号取较大者。
 func (s Snapshot) LatestInspection(hiveID string) (domain.Inspection, bool) {
-	items := s.InspectionsByHive[hiveID]
+	return latestInspection(s.InspectionsByHive[hiveID])
+}
+
+// latestInspection 在巡检切片中找出最近一次巡检，写入与聚合共用同一判定。
+func latestInspection(items []domain.Inspection) (domain.Inspection, bool) {
 	if len(items) == 0 {
 		return domain.Inspection{}, false
 	}
@@ -43,6 +48,17 @@ func (s Snapshot) LatestInspection(hiveID string) (domain.Inspection, bool) {
 		}
 	}
 	return latest, true
+}
+
+// DispositionsFor 返回蜂箱针对指定巡检登记的处置，按登记顺序。
+func (s Snapshot) DispositionsFor(hiveID, inspectionID string) []domain.Disposition {
+	out := []domain.Disposition{}
+	for _, item := range s.DispositionsByHive[hiveID] {
+		if item.InspectionID == inspectionID {
+			out = append(out, item)
+		}
+	}
+	return out
 }
 
 // LayingQueen 返回蜂箱当前处于产卵状态的蜂王。

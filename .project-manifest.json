@@ -9,6 +9,7 @@
     {"id": "store", "path": "internal/store", "responsibility": "并发安全内存存储与一致性快照"},
     {"id": "apiary", "path": "internal/apiary", "responsibility": "蜂场与蜂箱录入、蜂箱状态迁移"},
     {"id": "inspection", "path": "internal/inspection", "responsibility": "巡检接收与关注项判定"},
+    {"id": "disposition", "path": "internal/disposition", "responsibility": "关注项处置登记"},
     {"id": "queen", "path": "internal/queen", "responsibility": "蜂王更换与标记色推导"},
     {"id": "status", "path": "internal/status", "responsibility": "蜂场状态汇总聚合"},
     {"id": "app", "path": "internal/app", "responsibility": "应用组装与配置"},
@@ -69,10 +70,20 @@
       "module_ids": ["httpapi", "apiary", "domain", "store"]
     },
     {
+      "id": "dispose-concern",
+      "name": "登记关注项处置",
+      "entry": "POST /hives/{hiveId}/concern-dispositions",
+      "steps": ["把处置绑定到蜂箱当前最近一次巡检", "校验关注项确由该巡检派生且尚未处置", "在同一把写锁内写入处置记录"],
+      "success": "返回 201 与处置记录（含绑定的巡检编号）",
+      "failure": "未知蜂箱返回未找到，无巡检或关注项未派生返回状态错误，重复处置返回冲突",
+      "verification": "校验入口登记处置、断言重复处置冲突，并验证新巡检后旧处置不掩盖新关注项",
+      "module_ids": ["httpapi", "disposition", "domain", "store"]
+    },
+    {
       "id": "read-apiary-status",
       "name": "读取蜂场状态汇总",
       "entry": "GET /apiaries/{apiaryId}/status",
-      "steps": ["读取一致快照", "聚合状态计数、待巡检与关注项", "按蜂箱编号稳定排序返回"],
+      "steps": ["读取一致快照", "聚合状态计数、待巡检与关注项（区分已处置与未处置）", "按蜂箱编号稳定排序返回"],
       "success": "返回 200 与稳定排序的蜂场状态汇总",
       "failure": "未知蜂场返回未找到，asOf 非法返回校验错误",
       "verification": "校验入口构造多蜂箱场景并断言计数、待巡检与排序稳定",

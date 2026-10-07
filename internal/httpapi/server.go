@@ -4,16 +4,18 @@ import (
 	"net/http"
 
 	"example.com/apiary-colony-service/internal/apiary"
+	"example.com/apiary-colony-service/internal/disposition"
 	"example.com/apiary-colony-service/internal/inspection"
 	"example.com/apiary-colony-service/internal/queen"
 	"example.com/apiary-colony-service/internal/status"
 )
 
 type Deps struct {
-	Apiary     *apiary.Service
-	Inspection *inspection.Service
-	Queen      *queen.Service
-	Status     *status.Service
+	Apiary      *apiary.Service
+	Inspection  *inspection.Service
+	Queen       *queen.Service
+	Status      *status.Service
+	Disposition *disposition.Service
 }
 
 // Server 暴露蜂场协作服务，并把领域错误映射为稳定响应。

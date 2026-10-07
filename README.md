@@ -11,6 +11,7 @@
 - `internal/store`：并发安全的内存仓储与一致性快照。
 - `internal/apiary`：蜂场与蜂箱录入、蜂箱状态迁移。
 - `internal/inspection`：巡检接收与关注项判定。
+- `internal/disposition`：关注项处置登记。
 - `internal/queen`：蜂王更换与标记色推导。
 - `internal/status`：蜂场状态汇总聚合。
 - `internal/httpapi`：路由、请求解析与响应映射。
@@ -49,11 +50,14 @@ go run ./cmd/check -workflow read-apiary-status
 - `POST /hives/{hiveId}/inspections`：输入 `observedAt`（可选，RFC3339）、`colonyStrength`、
   `broodPattern`、`temper`、`miteCount`、`note`，返回巡检与派生关注项。
 - `GET /hives/{hiveId}/inspections`：列出巡检。
+- `POST /hives/{hiveId}/concern-dispositions`：输入 `concern`、`disposedBy`、`note`，
+  把处置绑定到最近一次巡检，返回处置记录（含绑定的巡检编号）。
+- `GET /hives/{hiveId}/concern-dispositions`：列出关注项处置记录。
 - `POST /hives/{hiveId}/queens`：输入 `origin`、`introducedAt`（可选）、`reason`，
   返回带标记色的新蜂王记录。
 - `GET /hives/{hiveId}/queens`：列出蜂王记录。
 - `GET /apiaries/{apiaryId}/status`：可选查询参数 `asOf`（RFC3339），返回状态计数、
-  待巡检蜂箱、有未处理关注项的蜂箱与逐蜂箱摘要。
+  待巡检蜂箱、有未处理关注项的蜂箱、关注项已全部处置的蜂箱与逐蜂箱摘要。
 
 错误响应统一为：
 
@@ -72,6 +76,11 @@ go run ./cmd/check -workflow read-apiary-status
 - 蜂王标记色由引入年份个位推导：`1/6` 白、`2/7` 黄、`3/8` 红、`4/9` 绿、`5/0` 蓝。
 - 巡检关注项阈值：螨计数 ≥ 9 记 `mite_load`，子脾为 `none` 记 `brood_gap`，
   性情为 `aggressive` 记 `temper_risk`，群势 ≤ 2 记 `low_strength`。
+- 关注项处置绑定到登记时的最近一次巡检，重复处置同一关注项返回冲突；
+  处置不改写原始巡检，新巡检派生的关注项不受旧处置影响。
+- 状态汇总把最近一次巡检的派生关注项区分为未处置（`openConcerns`）与已处置
+  （`resolvedConcerns`）：仍有未处置关注项的蜂箱列入 `concernHives`，
+  关注项全部处置完毕的蜂箱列入 `resolvedHives`。
 - 待巡检：从未巡检，或距 `asOf` 超过 14 天。
 
 ## 环境变量
@@ -88,6 +97,7 @@ go run ./cmd/check -workflow install-hive
 go run ./cmd/check -workflow record-inspection
 go run ./cmd/check -workflow replace-queen
 go run ./cmd/check -workflow advance-hive-state
+go run ./cmd/check -workflow dispose-concern
 go run ./cmd/check -workflow read-apiary-status
 ```
 

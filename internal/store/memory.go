@@ -17,9 +17,11 @@ type Memory struct {
 	hives       map[string]domain.Hive
 	inspections map[string][]domain.Inspection
 	queens      map[string][]domain.Queen
+	resolutions map[string][]domain.ConcernResolution
 
 	inspectionSeq int
 	queenSeq      int
+	resolutionSeq int
 }
 
 func NewMemory() *Memory {
@@ -28,6 +30,7 @@ func NewMemory() *Memory {
 		hives:       make(map[string]domain.Hive),
 		inspections: make(map[string][]domain.Inspection),
 		queens:      make(map[string][]domain.Queen),
+		resolutions: make(map[string][]domain.ConcernResolution),
 	}
 }
 
@@ -110,6 +113,77 @@ func (m *Memory) AddInspection(hiveID string, inspection domain.Inspection) (dom
 	hive.LastInspectionAt = &observedAt
 	m.hives[hiveID] = hive
 	return inspection, nil
+}
+
+// ResolutionOutcome 是一次处置登记的结果，InspectionID 指明处置落到了
+// 哪一次（最近一次）巡检上，便于调用方核对新旧关注项。
+type ResolutionOutcome struct {
+	InspectionID string
+	Resolutions  []domain.ConcernResolution
+}
+
+// ResolveConcerns 针对蜂箱「当前最近一次巡检」批量登记关注项处置。
+// 取最新巡检、校验关注项归属、查重与写入全部处于同一把写锁：
+// 与巡检提交并发时，要么处置落在旧巡检上（新巡检随后产生全新未处置项），
+// 要么落在新巡检上，二者顺序由锁唯一确定；同一关注项的并发/重复处置
+// 只有一个能成功登记，最终状态唯一。处置只追加，绝不改写巡检记录。
+func (m *Memory) ResolveConcerns(candidates []domain.ConcernResolution) (ResolutionOutcome, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	hiveID := candidates[0].HiveID
+	if _, ok := m.hives[hiveID]; !ok {
+		return ResolutionOutcome{}, domain.NotFound("蜂箱", hiveID)
+	}
+	latest, ok := latestInspectionLocked(m.inspections[hiveID])
+	if !ok {
+		return ResolutionOutcome{}, domain.InvalidState("蜂箱 %q 还没有巡检记录，无法登记处置", hiveID)
+	}
+	derived := make(map[string]bool, len(latest.Concerns))
+	for _, code := range latest.Concerns {
+		derived[code] = true
+	}
+	existing := make(map[string]bool)
+	for _, item := range m.resolutions[hiveID] {
+		existing[item.InspectionID+"|"+item.ConcernCode] = true
+	}
+	// 先完成全部校验再写入，保证批量登记的原子性。
+	for _, candidate := range candidates {
+		if !derived[candidate.ConcernCode] {
+			return ResolutionOutcome{}, domain.Invalid(
+				"concernCode",
+				"蜂箱 %q 最近一次巡检 %q 没有派生出关注项 %q",
+				hiveID, latest.ID, candidate.ConcernCode)
+		}
+		key := latest.ID + "|" + candidate.ConcernCode
+		if existing[key] {
+			return ResolutionOutcome{}, domain.Conflict(
+				"巡检 %q 的关注项 %q 已登记处置，不能重复处置", latest.ID, candidate.ConcernCode)
+		}
+		existing[key] = true
+	}
+	created := make([]domain.ConcernResolution, 0, len(candidates))
+	for _, candidate := range candidates {
+		m.resolutionSeq++
+		candidate.ID = fmt.Sprintf("resolution-%06d", m.resolutionSeq)
+		candidate.HiveID = hiveID
+		candidate.InspectionID = latest.ID
+		m.resolutions[hiveID] = append(m.resolutions[hiveID], candidate)
+		created = append(created, candidate)
+	}
+	return ResolutionOutcome{InspectionID: latest.ID, Resolutions: created}, nil
+}
+
+// ListResolutions 按处置登记编号升序返回蜂箱上的全部处置记录。
+func (m *Memory) ListResolutions(hiveID string) ([]domain.ConcernResolution, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if _, ok := m.hives[hiveID]; !ok {
+		return nil, domain.NotFound("蜂箱", hiveID)
+	}
+	items := m.resolutions[hiveID]
+	out := make([]domain.ConcernResolution, len(items))
+	copy(out, items)
+	return out, nil
 }
 
 // AddQueen 关闭原有产卵蜂王并写入新蜂王，两件事在同一把锁内完成，
@@ -198,6 +272,7 @@ func (m *Memory) Snapshot() Snapshot {
 		Hives:             make(map[string]domain.Hive, len(m.hives)),
 		InspectionsByHive: make(map[string][]domain.Inspection, len(m.inspections)),
 		QueensByHive:      make(map[string][]domain.Queen, len(m.queens)),
+		ResolutionsByHive: make(map[string][]domain.ConcernResolution, len(m.resolutions)),
 	}
 	for id, apiary := range m.apiaries {
 		snapshot.Apiaries[id] = apiary
@@ -224,6 +299,11 @@ func (m *Memory) Snapshot() Snapshot {
 		}
 		snapshot.QueensByHive[id] = copied
 	}
+	for id, items := range m.resolutions {
+		copied := make([]domain.ConcernResolution, len(items))
+		copy(copied, items)
+		snapshot.ResolutionsByHive[id] = copied
+	}
 	return snapshot
 }
 
@@ -233,4 +313,23 @@ func cloneHive(hive domain.Hive) domain.Hive {
 		hive.LastInspectionAt = &observedAt
 	}
 	return hive
+}
+
+// latestInspectionLocked 在已持锁的前提下按观察时间（相同则按编号较大者）
+// 选出蜂箱最近一次巡检。
+func latestInspectionLocked(items []domain.Inspection) (domain.Inspection, bool) {
+	if len(items) == 0 {
+		return domain.Inspection{}, false
+	}
+	latest := items[0]
+	for _, item := range items[1:] {
+		if item.ObservedAt.After(latest.ObservedAt) {
+			latest = item
+			continue
+		}
+		if item.ObservedAt.Equal(latest.ObservedAt) && item.ID > latest.ID {
+			latest = item
+		}
+	}
+	return latest, true
 }

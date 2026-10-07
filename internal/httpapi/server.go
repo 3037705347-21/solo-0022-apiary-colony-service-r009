@@ -6,6 +6,7 @@ import (
 	"example.com/apiary-colony-service/internal/apiary"
 	"example.com/apiary-colony-service/internal/inspection"
 	"example.com/apiary-colony-service/internal/queen"
+	"example.com/apiary-colony-service/internal/resolution"
 	"example.com/apiary-colony-service/internal/status"
 )
 
@@ -13,6 +14,7 @@ type Deps struct {
 	Apiary     *apiary.Service
 	Inspection *inspection.Service
 	Queen      *queen.Service
+	Resolution *resolution.Service
 	Status     *status.Service
 }
 

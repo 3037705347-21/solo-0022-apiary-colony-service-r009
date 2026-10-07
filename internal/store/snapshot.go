@@ -12,6 +12,7 @@ type Snapshot struct {
 	Hives             map[string]domain.Hive
 	InspectionsByHive map[string][]domain.Inspection
 	QueensByHive      map[string][]domain.Queen
+	ResolutionsByHive map[string][]domain.ConcernResolution
 }
 
 // ApiaryHives 返回蜂场下的蜂箱，按编号升序稳定排序。
@@ -43,6 +44,19 @@ func (s Snapshot) LatestInspection(hiveID string) (domain.Inspection, bool) {
 		}
 	}
 	return latest, true
+}
+
+// ResolutionMap 返回蜂箱针对某一次巡检已登记处置的关注项集合。
+// 处置按 (InspectionID, ConcernCode) 关联，因此旧巡检上的处置
+// 不会出现在新巡检的映射中，新关注项不会被旧处置掩盖。
+func (s Snapshot) ResolutionMap(hiveID, inspectionID string) map[string]domain.ConcernResolution {
+	result := map[string]domain.ConcernResolution{}
+	for _, item := range s.ResolutionsByHive[hiveID] {
+		if item.InspectionID == inspectionID {
+			result[item.ConcernCode] = item
+		}
+	}
+	return result
 }
 
 // LayingQueen 返回蜂箱当前处于产卵状态的蜂王。

@@ -2,11 +2,12 @@ package inspection
 
 import "example.com/apiary-colony-service/internal/domain"
 
+// 关注项编码在 domain 中统一定义，这里保留导出别名以兼容既有引用。
 const (
-	ConcernMiteLoad    = "mite_load"
-	ConcernBroodGap    = "brood_gap"
-	ConcernTemperRisk  = "temper_risk"
-	ConcernLowStrength = "low_strength"
+	ConcernMiteLoad    = domain.ConcernMiteLoad
+	ConcernBroodGap    = domain.ConcernBroodGap
+	ConcernTemperRisk  = domain.ConcernTemperRisk
+	ConcernLowStrength = domain.ConcernLowStrength
 )
 
 const (
@@ -18,16 +19,16 @@ const (
 func DeriveConcerns(record domain.Inspection) []string {
 	concerns := make([]string, 0, 4)
 	if record.MiteCount >= MiteLoadThreshold {
-		concerns = append(concerns, ConcernMiteLoad)
+		concerns = append(concerns, domain.ConcernMiteLoad)
 	}
 	if record.BroodPattern == domain.BroodNone {
-		concerns = append(concerns, ConcernBroodGap)
+		concerns = append(concerns, domain.ConcernBroodGap)
 	}
 	if record.Temper == domain.TemperAggressive {
-		concerns = append(concerns, ConcernTemperRisk)
+		concerns = append(concerns, domain.ConcernTemperRisk)
 	}
 	if record.ColonyStrength <= LowStrengthCeiling {
-		concerns = append(concerns, ConcernLowStrength)
+		concerns = append(concerns, domain.ConcernLowStrength)
 	}
 	return concerns
 }
